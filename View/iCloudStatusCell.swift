@@ -16,13 +16,13 @@ class iCloudStatusCell: UITableViewCell {
         self.backgroundColor = BKColor.background.secondary
         self.textLabel?.text = NSLocalizedString("iCloudSatatus")
         self.detailTextLabel?.text = ""
+        self.detailTextLabel?.textColor = BKColor.grey.darken2
         CKContainer.default().accountStatus { status, _ in
             dispatch_sync_safely_main_queue {
                 switch status {
                 case .available:
                     self.detailTextLabel?.text = NSLocalizedString("available")
-
-                case .noAccount, .restricted:
+                case .noAccount, .restricted, .temporarilyUnavailable:
                     self.detailTextLabel?.text = NSLocalizedString("restricted")
                 case .couldNotDetermine:
                     self.detailTextLabel?.text = NSLocalizedString("unknown")

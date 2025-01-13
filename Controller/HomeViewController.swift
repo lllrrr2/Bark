@@ -87,7 +87,7 @@ class HomeViewController: BaseViewController<HomeViewModel> {
         let startRequestAuthorization: () -> Observable<Bool> = {
             Single<Bool>.create { single -> Disposable in
                 let center = UNUserNotificationCenter.current()
-                center.requestAuthorization(options: [.alert, .sound, .badge], completionHandler: { (_ granted: Bool, _: Error?) -> Void in
+                center.requestAuthorization(options: [.alert, .sound, .badge, .criticalAlert], completionHandler: { (_ granted: Bool, _: Error?) -> Void in
                     single(.success(granted))
                 })
                 return Disposables.create()
@@ -202,7 +202,10 @@ class HomeViewController: BaseViewController<HomeViewModel> {
         else if let viewModel = viewModel as? SoundsViewModel {
             viewController = SoundsViewController(viewModel: viewModel)
         }
-        
+        else if let viewModel = viewModel as? CryptoSettingViewModel {
+            self.navigationController?.present(BarkNavigationController(rootViewController: CryptoSettingController(viewModel: viewModel)), animated: true)
+            return
+        }
         if let viewController = viewController {
             self.navigationController?.pushViewController(viewController, animated: true)
         }
