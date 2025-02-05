@@ -6,40 +6,20 @@
 //  Copyright © 2018年 Fin. All rights reserved.
 //
 
-import CloudKit
-import IceCream
-import Material
-import RealmSwift
+import IQKeyboardManagerSwift
+import IQKeyboardToolbarManager
+import SwiftyStoreKit
 import UIKit
 import UserNotifications
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     var window: UIWindow?
-    var syncEngine: SyncEngine?
+//    var syncEngine: SyncEngine?
     func setupRealm() {
-        let groupUrl = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.bark")
-        let fileUrl = groupUrl?.appendingPathComponent("bark.realm")
-        let config = Realm.Configuration(
-            fileURL: fileUrl,
-            schemaVersion: 13,
-            migrationBlock: { _, oldSchemaVersion in
-                // We haven’t migrated anything yet, so oldSchemaVersion == 0
-                if oldSchemaVersion < 1 {
-                    // Nothing to do!
-                    // Realm will automatically detect new properties and removed properties
-                    // And will update the schema on disk automatically
-                }
-            }
-        )
         // Tell Realm to use this new configuration object for the default Realm
-        Realm.Configuration.defaultConfiguration = config
-
-        // iCloud 同步
-        syncEngine = SyncEngine(objects: [
-            SyncObject(type: Message.self)
-        ], databaseScope: .private)
-
+        Realm.Configuration.defaultConfiguration = kRealmDefaultConfiguration
+        
         #if DEBUG
         let realm = try? Realm()
         print("message count: \(realm?.objects(Message.self).count ?? 0)")
@@ -47,38 +27,37 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
     }
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        self.window = UIWindow(frame: UIScreen.main.bounds)
+        self.window?.backgroundColor = UIColor.black
+
         // 必须在应用一开始就配置，否则应用可能提前在配置之前试用了 Realm() ，则会创建两个独立数据库。
         setupRealm()
 
-        self.window = UIWindow(frame: UIScreen.main.bounds)
-        let tabBarController = StateStorageTabBarController()
-        tabBarController.tabBar.tintColor = BKColor.grey.darken4
-
-        self.window?.backgroundColor = UIColor.black
-        self.window?.rootViewController = BarkSnackbarController(
-            rootViewController: tabBarController
-        )
-
-        tabBarController.viewControllers = [
-            BarkNavigationController(rootViewController: HomeViewController(viewModel: HomeViewModel())),
-            BarkNavigationController(rootViewController: MessageListViewController(viewModel: MessageListViewModel())),
-            BarkNavigationController(rootViewController: MessageSettingsViewController(viewModel: MessageSettingsViewModel()))
-        ]
-
-        let tabBarItems = [UITabBarItem(title: NSLocalizedString("service"), image: UIImage(named: "baseline_gite_black_24pt"), tag: 0),
-                           UITabBarItem(title: NSLocalizedString("historyMessage"), image: Icon.history, tag: 1),
-                           UITabBarItem(title: NSLocalizedString("settings"), image: UIImage(named: "baseline_manage_accounts_black_24pt"), tag: 2)]
-        for (index, viewController) in tabBarController.viewControllers!.enumerated() {
-            viewController.tabBarItem = tabBarItems[index]
+        IQKeyboardManager.shared.isEnabled = true
+        IQKeyboardToolbarManager.shared.isEnabled = true
+        if #available(iOS 14, *), UIDevice.current.userInterfaceIdiom == .pad {
+            let splitViewController = BarkSplitViewController(style: .doubleColumn)
+            self.window?.rootViewController = BarkSnackbarController(rootViewController: splitViewController)
+        } else {
+            let tabBarController = BarkTabBarController()
+            self.window?.rootViewController = BarkSnackbarController(
+                rootViewController: tabBarController
+            )
         }
-
+        
+        // 需先配置好 tabBarController 的 viewControllers，显示时会默认显示上次打开的页面
         self.window?.makeKeyAndVisible()
-
+        
         UNUserNotificationCenter.current().delegate = self
+        var actions = [
+            UNNotificationAction(identifier: "copy", title: NSLocalizedString("Copy2"), options: UNNotificationActionOptions.foreground)
+        ]
+        if #available(iOSApplicationExtension 15.0, *) {
+            actions.append(UNNotificationAction(identifier: "mute", title: NSLocalizedString("muteGroup1Hour"), options: UNNotificationActionOptions.foreground))
+        }
         UNUserNotificationCenter.current().setNotificationCategories([
-            UNNotificationCategory(identifier: "myNotificationCategory", actions: [
-                UNNotificationAction(identifier: "copy", title: NSLocalizedString("Copy2"), options: UNNotificationActionOptions.foreground)
-            ], intentIdentifiers: [], options: .customDismissAction)
+            // customDismissAction 会在 clear 推送时，调起APP，这时可以顺便更新下 DeviceToken，防止过期。
+            UNNotificationCategory(identifier: "myNotificationCategory", actions: actions, intentIdentifiers: [], options: .customDismissAction)
         ])
 
         UNUserNotificationCenter.current().getNotificationSettings { settings in
@@ -95,6 +74,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         bar.backIndicatorTransitionMaskImage = UIImage(named: "back")
         bar.tintColor = BKColor.grey.darken4
 
+        // 内购
+        SwiftyStoreKit.completeTransactions { _ in }
         return true
     }
 
@@ -110,89 +91,30 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         ServerManager.shared.syncAllServers()
     }
 
-    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        notificatonHandler(userInfo: notification.request.content.userInfo)
-    }
-
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+        guard response.actionIdentifier != UNNotificationDismissActionIdentifier else {
+            // clear 推送时，不要弹出提示框
+            return
+        }
         notificatonHandler(userInfo: response.notification.request.content.userInfo)
     }
 
-    func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any], fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
-        if let dict = userInfo as? [String: NSObject],
-           let notification = CKNotification(fromRemoteNotificationDictionary: dict),
-           let subscriptionID = notification.subscriptionID, IceCreamSubscription.allIDs.contains(subscriptionID)
-        {
-            NotificationCenter.default.post(name: Notifications.cloudKitDataDidChangeRemotely.name, object: nil, userInfo: userInfo)
-            completionHandler(.newData)
-        }
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        return .alert
     }
-
+    
     private func notificatonHandler(userInfo: [AnyHashable: Any]) {
-        let navigationController = Client.shared.currentNavigationController
-        func presentController() {
-            let alert = (userInfo["aps"] as? [String: Any])?["alert"] as? [String: Any]
-            let title = alert?["title"] as? String
-            let body = alert?["body"] as? String
-            let url: URL? = {
-                if let url = userInfo["url"] as? String {
-                    return URL(string: url)
-                }
-                return nil
-            }()
-
-            // URL 直接打开
-            if let url = url {
-                Client.shared.openUrl(url: url)
-                return
-            }
-
-            let alertController = UIAlertController(title: title, message: body, preferredStyle: .alert)
-            alertController.addAction(UIAlertAction(title: "复制内容", style: .default, handler: { _ in
-                if let copy = userInfo["copy"] as? String {
-                    UIPasteboard.general.string = copy
-                }
-                else {
-                    UIPasteboard.general.string = body
-                }
-            }))
-            alertController.addAction(UIAlertAction(title: "更多操作", style: .default, handler: { _ in
-                var shareContent = ""
-                if let title = title {
-                    shareContent += "\(title)\n"
-                }
-                if let body = body {
-                    shareContent += "\(body)\n"
-                }
-                for (key, value) in userInfo {
-                    if ["aps", "title", "body", "url"].contains((key as? String) ?? "") {
-                        continue
-                    }
-                    shareContent += "\(key): \(value) \n"
-                }
-                var items: [Any] = []
-                items.append(shareContent)
-                if let url = url {
-                    items.append(url)
-                }
-                let controller = UIApplication.shared.keyWindow?.rootViewController
-                let activityController = UIActivityViewController(activityItems: items,
-                                                                  applicationActivities: nil)
-                controller?.present(activityController, animated: true, completion: nil)
-            }))
-            alertController.addAction(UIAlertAction(title: "取消", style: .cancel, handler: nil))
-
-            navigationController?.present(alertController, animated: true, completion: nil)
+        if let action = userInfo["action"] as? String, action == "none" {
+            return
         }
-
-        if let presentedController = navigationController?.presentedViewController {
-            presentedController.dismiss(animated: false) {
-                presentController()
-            }
+        
+        // URL 直接打开
+        if let url = try? (userInfo["url"] as? String)?.asURL() {
+            Client.shared.openUrl(url: url)
+            return
         }
-        else {
-            presentController()
-        }
+                
+        alertNotification(userInfo: userInfo)
     }
 
     func applicationWillResignActive(_ application: UIApplication) {
@@ -206,18 +128,92 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
     }
 
     func applicationWillEnterForeground(_ application: UIApplication) {
-        ServerManager.shared.syncAllServers()
-        
         // 设置 -1 可以清除应用角标，但不清除通知中心的推送
         // 设置 0 会将通知中心的所有推送一起清空掉
         UIApplication.shared.applicationIconBadgeNumber = -1
     }
 
-    func applicationDidBecomeActive(_ application: UIApplication) {
-        // Restart any tasks that were paused (or not yet started) while the application was inactive. If the application was previously in the background, optionally refresh the user interface.
-    }
-
     func applicationWillTerminate(_ application: UIApplication) {
         // Called when the application is about to terminate. Save data if appropriate. See also applicationDidEnterBackground:.
+    }
+    
+    func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+        if url.scheme?.lowercased() == "bark" && url.host?.lowercased() == "addserver" {
+            // 提取参数
+            let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
+            let address = queryItems?.first(where: { $0.name == "address" })?.value
+
+            // 处理添加服务器的逻辑
+            if let serverAddress = try? address?.asURL() {
+                let server = Server(address: serverAddress.absoluteString, key: "")
+                ServerManager.shared.addServer(server: server)
+                ServerManager.shared.setCurrentServer(serverId: server.id)
+                ServerManager.shared.syncAllServers()
+                HUDSuccess(NSLocalizedString("AddedSuccessfully"))
+            }
+            return true
+        }
+        return false
+    }
+}
+
+extension AppDelegate {
+    func alertNotification(userInfo: [AnyHashable: Any]) {
+        let alert = (userInfo["aps"] as? [String: Any])?["alert"] as? [String: Any]
+        let title = alert?["title"] as? String
+        let subtitle = alert?["subtitle"] as? String
+        let body = alert?["body"] as? String
+        let url = try? (userInfo["url"] as? String)?.asURL()
+
+        let alertController = UIAlertController(title: title, message: body, preferredStyle: .alert)
+        alertController.addAction(UIAlertAction(title: NSLocalizedString("CopyContent"), style: .default, handler: { _ in
+            if let copy = userInfo["copy"] as? String {
+                UIPasteboard.general.string = copy
+            } else {
+                UIPasteboard.general.string = body
+            }
+        }))
+        alertController.addAction(UIAlertAction(title: NSLocalizedString("MoreActions"), style: .default, handler: { _ in
+            var shareContent = ""
+            if let title = title {
+                shareContent += "\(title)\n"
+            }
+            if let subtitle = subtitle {
+                shareContent += "\(subtitle)\n"
+            }
+            if let body = body {
+                shareContent += "\(body)\n"
+            }
+            for (key, value) in userInfo {
+                if ["aps", "title", "subtitle", "body", "url"].contains((key as? String) ?? "") {
+                    continue
+                }
+                shareContent += "\(key): \(value) \n"
+            }
+            var items: [Any] = []
+            items.append(shareContent)
+            if let url = url {
+                items.append(url)
+            }
+            let controller = Client.shared.window?.rootViewController
+            let activityController = UIActivityViewController(activityItems: items,
+                                                              applicationActivities: nil)
+            if let popover = activityController.popoverPresentationController {
+                popover.sourceView = controller?.view
+                popover.sourceRect = CGRect(x: controller?.view.bounds.midX ?? 0, y: controller?.view.bounds.midY ?? 0, width: 0, height: 0)
+            }
+            controller?.present(activityController, animated: true, completion: nil)
+        }))
+        alertController.addAction(UIAlertAction(title: NSLocalizedString("Cancel"), style: .cancel, handler: nil))
+
+        let viewController = Client.shared.currentSnackbarController
+        
+        if let presentedController = viewController?.presentedViewController {
+            presentedController.dismiss(animated: false) {
+                viewController?.present(alertController, animated: true, completion: nil)
+            }
+        } else {
+            viewController?.present(alertController, animated: true, completion: nil)
+        }
     }
 }

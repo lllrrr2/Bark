@@ -14,38 +14,17 @@ import RxSwift
 import SwiftyJSON
 import UIKit
 
-public enum ApiError: Swift.Error {
-    case Error(info: String)
-    case AccountBanned(info: String)
-}
-
-extension Swift.Error {
-    func rawString() -> String {
-        guard let err = self as? ApiError else {
-            return self.localizedDescription
-        }
-        switch err {
-        case .Error(let info):
-            return info
-        case .AccountBanned(let info):
-            return info
-        }
-    }
-}
-
 extension Observable where Element: Moya.Response {
     /// 过滤 HTTP 错误，例如超时，请求失败等
     func filterHttpError() -> Observable<Result<Element, ApiError>> {
-        return
-            catchErrorJustReturn(Element(statusCode: 599, data: Data()))
-                .map { response -> Result<Element, ApiError> in
-                    if (200 ... 209) ~= response.statusCode {
-                        return .success(response)
-                    }
-                    else {
-                        return .failure(ApiError.Error(info: "网络错误"))
-                    }
+        return catchAndReturn(Element(statusCode: 599, data: Data()))
+            .map { response -> Result<Element, ApiError> in
+                if (200...209) ~= response.statusCode {
+                    return .success(response)
+                } else {
+                    return .failure(ApiError.Error(info: "网络错误"))
                 }
+            }
     }
     
     /// 过滤逻辑错误，例如协议里返回 错误CODE
@@ -62,16 +41,14 @@ extension Observable where Element: Moya.Response {
                            code == 200
                         {
                             return .success(json)
-                        }
-                        else {
+                        } else {
                             var msg: String = ""
                             if json["message"].exists() {
                                 msg = json["message"].rawString()!
                             }
                             return .failure(ApiError.Error(info: msg))
                         }
-                    }
-                    catch {
+                    } catch {
                         return .failure(ApiError.Error(info: error.rawString()))
                     }
                 case .failure(let error):
@@ -95,8 +72,7 @@ extension Observable where Element: Moya.Response {
                 }
                 if let model: T = self.resultFromJSON(json: rootJson) {
                     return .success(model)
-                }
-                else {
+                } else {
                     return .failure(ApiError.Error(info: "json 转换失败"))
                 }
             case .failure(let error):
@@ -122,8 +98,7 @@ extension Observable where Element: Moya.Response {
                 for json in jsonArray {
                     if let jsonModel: T = self.resultFromJSON(json: json) {
                         result.append(jsonModel)
-                    }
-                    else {
+                    } else {
                         return .failure(ApiError.Error(info: "json 转换失败"))
                     }
                 }
