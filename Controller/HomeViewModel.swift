@@ -32,6 +32,7 @@ class HomeViewModel: ViewModel, ViewModelType {
         let clienStateChanged: Driver<Client.ClienState>
         let tableViewHidden: Driver<Bool>
         let showSnackbar: Driver<String>
+        let alertServerError: Driver<String>
         let startButtonEnable: Driver<Bool>
         let copy: Driver<String>
         let preview: Driver<URL>
@@ -39,72 +40,91 @@ class HomeViewModel: ViewModel, ViewModelType {
         let registerForRemoteNotifications: Driver<Void>
     }
     
-    let previews: [PreviewModel] = {
-        [
-            PreviewModel(
-                body: NSLocalizedString("CustomedNotificationContent"),
-                notice: NSLocalizedString("Notice1")
-            ),
-            PreviewModel(
-                title: NSLocalizedString("CustomedNotificationTitle"),
-                body: NSLocalizedString("CustomedNotificationContent"),
-                notice: NSLocalizedString("Notice2")
-            ),
-            PreviewModel(
-                body: NSLocalizedString("notificationSound"),
-                notice: NSLocalizedString("setSounds"),
-                queryParameter: "sound=minuet",
-                moreInfo: NSLocalizedString("viewAllSounds"),
-                moreViewModel: SoundsViewModel()
-            ),
-            PreviewModel(
-                body: NSLocalizedString("archiveNotificationMessageTitle"),
-                notice: NSLocalizedString("archiveNotificationMessage"),
-                queryParameter: "isArchive=1"
-            ),
-            PreviewModel(
-                body: NSLocalizedString("notificationIcon"),
-                notice: NSLocalizedString("notificationIconNotice"),
-                queryParameter: "icon=https://day.app/assets/images/avatar.jpg",
-                image: UIImage(named: "icon")
-            ),
-            PreviewModel(
-                body: NSLocalizedString("messageGroup"),
-                notice: NSLocalizedString("groupMessagesNotice"),
-                queryParameter: "group=groupName",
-                image: UIImage(named: "group")
-            ),
-            PreviewModel(
-                body: NSLocalizedString("interruptionLevel"),
-                notice: NSLocalizedString("interruptionLevelNotice"),
-                queryParameter: "level=timeSensitive"
-            ),
-            PreviewModel(
-                body: "URL Test",
-                notice: NSLocalizedString("urlParameter"),
-                queryParameter: "url=https://www.baidu.com"
-            ),
-            PreviewModel(
-                body: "Copy Test",
-                notice: NSLocalizedString("copyParameter"),
-                queryParameter: "copy=test",
-                image: UIImage(named: "copyTest")
-            ),
-            PreviewModel(
-                body: NSLocalizedString("badge"),
-                notice: NSLocalizedString("badgeNotice"),
-                queryParameter: "badge=1"
-            ),
-            PreviewModel(
-                body: NSLocalizedString("automaticallyCopyTitle"),
-                notice: NSLocalizedString("automaticallyCopy"),
-                queryParameter: "autoCopy=1&copy=optional"
-            )
-        ]
-    }()
+    let previews: [PreviewModel] = [
+        PreviewModel(
+            body: NSLocalizedString("CustomedNotificationContent"),
+            notice: NSLocalizedString("Notice1")
+        ),
+        PreviewModel(
+            title: NSLocalizedString("CustomedNotificationTitle"),
+            body: NSLocalizedString("CustomedNotificationContent"),
+            notice: NSLocalizedString("Notice2")
+        ),
+        PreviewModel(
+            body: NSLocalizedString("notificationSound"),
+            notice: NSLocalizedString("setSounds"),
+            queryParameter: "sound=minuet",
+            moreInfo: NSLocalizedString("viewAllSounds"),
+            moreViewModel: SoundsViewModel()
+        ),
+        PreviewModel(
+            body: NSLocalizedString("ringtone"),
+            notice: NSLocalizedString("ringtoneNotice"),
+            queryParameter: "call=1"
+        ),
+        PreviewModel(
+            body: NSLocalizedString("archiveNotificationMessageTitle"),
+            notice: NSLocalizedString("archiveNotificationMessage"),
+            queryParameter: "isArchive=1"
+        ),
+        PreviewModel(
+            body: NSLocalizedString("notificationIcon"),
+            notice: NSLocalizedString("notificationIconNotice"),
+            queryParameter: "icon=https://day.app/assets/images/avatar.jpg",
+            image: UIImage(named: "icon")
+        ),
+        PreviewModel(
+            body: NSLocalizedString("messageGroup"),
+            notice: NSLocalizedString("groupMessagesNotice"),
+            queryParameter: "group=groupName",
+            image: UIImage(named: "group")
+        ),
+        PreviewModel(
+            body: NSLocalizedString("pushNotificationEncryption"),
+            notice: NSLocalizedString("encryptionNotice"),
+            queryParameter: "ciphertext=ciphertext",
+            moreInfo: NSLocalizedString("encryptionSettings"),
+            moreViewModel: CryptoSettingViewModel()
+        ),
+        PreviewModel(
+            body: NSLocalizedString("criticalAlert"),
+            notice: NSLocalizedString("criticalAlertNotice"),
+            queryParameter: "level=critical&volume=5",
+            image: UIImage(named: "criticalAlert")
+        ),
+        PreviewModel(
+            body: NSLocalizedString("interruptionLevel"),
+            notice: NSLocalizedString("interruptionLevelNotice"),
+            queryParameter: "level=timeSensitive"
+        ),
+        PreviewModel(
+            body: "URL Test",
+            notice: NSLocalizedString("urlParameter"),
+            queryParameter: "url=https://www.baidu.com"
+        ),
+        PreviewModel(
+            body: "Copy Test",
+            notice: NSLocalizedString("copyParameter"),
+            queryParameter: "copy=test",
+            image: UIImage(named: "copyTest")
+        ),
+        PreviewModel(
+            body: NSLocalizedString("badge"),
+            notice: NSLocalizedString("badgeNotice"),
+            queryParameter: "badge=1"
+        ),
+        PreviewModel(
+            body: NSLocalizedString("automaticallyCopyTitle"),
+            notice: NSLocalizedString("automaticallyCopy"),
+            queryParameter: "autoCopy=1&copy=optional"
+        )
+    ]
+    
+    /// 记录服务器错误的次数，如果错误次数大于2次，弹出提示引导用户查看FAQ。
+    private var serverErrorCount = 0
     
     func transform(input: Input) -> Output {
-        let title = BehaviorRelay(value: URL(string: ServerManager.shared.currentServer.address)?.host ?? "")
+        let title = BehaviorRelay(value: ServerManager.shared.currentServer.host)
         
         let sectionModel = SectionModel(
             model: "previews",
@@ -134,8 +154,8 @@ class HomeViewModel: ViewModel, ViewModelType {
             }
             .map { response -> Client.ClienState in
                 switch response {
-                case .failure:
-                    return .serverError
+                case .failure(let error):
+                    return .serverError(error: error)
                 default:
                     return .ok
                 }
@@ -150,6 +170,7 @@ class HomeViewModel: ViewModel, ViewModelType {
             .asDriver(onErrorJustReturn: false)
         
         let showSnackbar = PublishRelay<String>()
+        let alertServerError = PublishRelay<String>()
         
         // 点击注册按钮后，如果不允许推送，弹出提示
         tableViewHidden
@@ -171,13 +192,22 @@ class HomeViewModel: ViewModel, ViewModelType {
             .map { _ in () }
 
         // client state 变化时，发出相应错误提醒
-        input.clientState.drive(onNext: { state in
+        input.clientState.drive(onNext: { [weak self] state in
+            guard let self else { return }
+            
             switch state {
             case .ok: break
-            case .serverError:
-                showSnackbar.accept(NSLocalizedString("ServerError"))
+            case .serverError(let error):
+                if serverErrorCount < 2 {
+                    showSnackbar.accept("\(NSLocalizedString("ServerError")): \(error.rawString())")
+                } else {
+                    alertServerError.accept(error.rawString())
+                }
+                serverErrorCount += 1
             default: break
             }
+            // 主要用于 url scheme 添加服务器时会有state状态改变事件，顺便更新下标题
+            title.accept(ServerManager.shared.currentServer.host)
         })
         .disposed(by: rx.disposeBag)
         
@@ -189,7 +219,7 @@ class HomeViewModel: ViewModel, ViewModelType {
                 (model as! ServerListViewModel).currentServerChanged.asDriver(onErrorDriveWith: .empty())
             }
             .map { server -> String in
-                (try? server.address.asURL().host) ?? ""
+                server.host
             }
             .drive(title)
             .disposed(by: rx.disposeBag)
@@ -202,6 +232,7 @@ class HomeViewModel: ViewModel, ViewModelType {
             clienStateChanged: clienState.asDriver(onErrorDriveWith: .empty()),
             tableViewHidden: tableViewHidden,
             showSnackbar: showSnackbar.asDriver(onErrorDriveWith: .empty()),
+            alertServerError: alertServerError.asDriver(onErrorDriveWith: .empty()),
             startButtonEnable: Driver.just(true),
             copy: Driver.merge(sectionModel.items.map { $0.copy.asDriver(onErrorDriveWith: .empty()) }),
             preview: Driver.merge(sectionModel.items.map { $0.preview.asDriver(onErrorDriveWith: .empty()) }),

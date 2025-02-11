@@ -38,7 +38,7 @@ class NewServerViewModel: ViewModel, ViewModelType {
         let showSnackbar = PublishRelay<String>()
 
         let notice = input.noticeClick
-            .map { URL(string: "https://day.app/2018/06/bark-server-document/")! }
+            .map { URL(string: NSLocalizedString("deployUrl"))! }
             .asDriver()
         
         input.viewDidAppear
@@ -81,7 +81,7 @@ class NewServerViewModel: ViewModel, ViewModelType {
                     ServerManager.shared.setCurrentServer(serverId: server.id)
                     ServerManager.shared.syncAllServers()
                     
-                    strongSelf.pop.accept(strongSelf.url)
+                    strongSelf.pop.accept(URL(string: strongSelf.url)?.host ?? "")
                     showSnackbar.accept(NSLocalizedString("AddedSuccessfully"))
                 case .failure(let error):
                     showSnackbar.accept("\(NSLocalizedString("InvalidServer"))\(error.rawString())")
